@@ -1,62 +1,66 @@
 from playwright.sync_api import sync_playwright
 import requests
+import os
+import sys
 
-# ==========================
-# CONFIGURATION
-# ==========================
-
-BOT_TOKEN = "8816952930:AAGsO__i8ONwDPRmIbm0jXl7BYTWy92pUx8"
-CHAT_ID = "907538806"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
 PRODUCT_URL = "https://www.hmtwatches.store/product/b8fbabdb-a49d-4e5d-92c6-71eda34c9382"
 
 
-def send_telegram(message):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-
+def send(msg):
     requests.post(
-        url,
+        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
         data={
             "chat_id": CHAT_ID,
-            "text": message
-        }
+            "text": msg
+        },
+        timeout=30
     )
 
 
-with sync_playwright() as p:
+try:
+    with sync_playwright() as p:
 
-    browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=True)
 
-    page = browser.new_page()
+        page = browser.new_page()
 
-    page.goto(PRODUCT_URL, wait_until="networkidle")
+        page.goto(PRODUCT_URL, timeout=60000)
 
-    html = page.content()
+        page.wait_for_timeout(5000)
 
-    title = page.title()
+        html = page.content()
 
-    print(title)
+        title = page.title()
 
-    if "Out of Stock" in html:
-        print("❌ OUT OF STOCK")
+        print(title)
 
-    elif "Add to Cart" in html:
+        if "The request could not be satisfied" in html:
+            print("CloudFront blocked request")
+            sys.exit(1)
 
-        print("🎉 IN STOCK")
+        if "Out of Stock" in html:
+            print("OUT OF STOCK")
 
-        send_telegram(
-            f"""🚨 HMT STOCK ALERT 🚨
+        elif "Add to Cart" in html:
+            print("IN STOCK")
+
+            send(
+f"""🚨 HMT STOCK ALERT 🚨
 
 {title}
 
-Available Now!
-
 {PRODUCT_URL}
 """
-        )
+            )
 
-    else:
+        else:
+            print("UNKNOWN STATUS")
 
-        print("⚠ Unable to determine stock status.")
+        browser.close()
 
-    browser.close()
+except Exception as e:
+    print(e)
+    sys.exit(1)
