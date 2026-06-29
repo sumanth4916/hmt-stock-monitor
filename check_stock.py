@@ -1,26 +1,68 @@
-from playwright.sync_api import sync_playwright
-import requests
+import json
 import os
 import time
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+from playwright.sync_api import sync_playwright
 
-PRODUCT_URL = "https://www.hmtwatches.store/product/b8fbabdb-a49d-4e5d-92c6-71eda34c9382"
+from telegram_utils import send
+
+PRODUCTS = [
+    {
+        "name": "HMT Stellar DASS 04 Blue",
+        "url": "https://www.hmtwatches.store/product/b8fbabdb-a49d-4e5d-92c6-71eda34c9382"
+    }
+]
+
+STATE_FILE = "state.json"
 
 
-def send(msg):
-    requests.post(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        data={
-            "chat_id": CHAT_ID,
-            "text": msg
-        },
-        timeout=30
+def load_state():
+    if not os.path.exists(STATE_FILE):
+        return {}
+
+    with open(STATE_FILE, "r") as f:
+        return json.load(f)
+
+
+def save_state(state):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f, indent=4)
+
+
+def check_product(browser, product):
+
+    page = browser.new_page(
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+        viewport={"width": 1366, "height": 768},
     )
 
+    page.goto(
+        product["url"],
+        wait_until="domcontentloaded",
+        timeout=60000,
+    )
 
-def check_stock():
+    page.wait_for_timeout(5000)
+
+    html = page.content()
+
+    page.close()
+
+    if "The request could not be satisfied" in html:
+        return "BLOCKED"
+
+    if "Out of Stock" in html:
+        return "OUT"
+
+    if "Add to Cart" in html:
+        return "IN"
+
+    return "UNKNOWN"
+
+
+def main():
+
+    state = load_state()
 
     with sync_playwright() as p:
 
@@ -29,84 +71,80 @@ def check_stock():
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
-                "--disable-dev-shm-usage"
-            ]
+                "--disable-dev-shm-usage",
+            ],
         )
 
-        page = browser.new_page(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
-            viewport={"width": 1366, "height": 768}
-        )
+        for product in PRODUCTS:
 
-        page.goto(
-            PRODUCT_URL,
-            wait_until="domcontentloaded",
-            timeout=60000
-        )
+            print("=" * 60)
+            print(product["name"])
 
-        page.wait_for_timeout(5000)
+            result = None
 
-        html = page.content()
+            for attempt in range(3):
 
-        title = page.title()
+                print(f"Attempt {attempt + 1}")
 
-        print("TITLE:", title)
+                try:
+
+                    result = check_product(browser, product)
+
+                    print("STATUS:", result)
+
+                    if result != "BLOCKED":
+                        break
+
+                    time.sleep(10)
+
+                except Exception as e:
+
+                    print(e)
+                    time.sleep(10)
+
+            previous = state.get(product["name"], "OUT")
+
+            if result == "IN":
+
+                if previous != "IN":
+
+                    print("NEW STOCK FOUND")
+
+                    send(
+f"""🚨 HMT STOCK ALERT 🚨
+
+{product['name']}
+
+Available Now!
+
+{product['url']}
+"""
+                    )
+
+                    state[product["name"]] = "IN"
+
+                else:
+
+                    print("Already notified")
+
+            elif result == "OUT":
+
+                print("Still Out of Stock")
+
+                state[product["name"]] = "OUT"
+
+            elif result == "BLOCKED":
+
+                print("CloudFront blocked after retries")
+
+            else:
+
+                print("Unknown page state")
 
         browser.close()
 
-        if "The request could not be satisfied" in html:
-            return "BLOCKED"
-
-        if "Out of Stock" in html:
-            return "OUT"
-
-        if "Add to Cart" in html:
-            return "IN"
-
-        return "UNKNOWN"
+    save_state(state)
 
 
-for attempt in range(3):
-
-    print(f"Attempt {attempt + 1}")
-
-    try:
-
-        result = check_stock()
-
-        print("STATUS:", result)
-
-        if result == "OUT":
-            print("Watch is still out of stock.")
-            break
-
-        elif result == "IN":
-
-            send(
-f"""🚨 HMT STOCK ALERT 🚨
-
-The HMT Stellar DASS 04 is AVAILABLE!
-
-{PRODUCT_URL}
-"""
-            )
-
-            print("Telegram notification sent.")
-            break
-
-        elif result == "BLOCKED":
-
-            print("CloudFront blocked this request. Retrying...")
-            time.sleep(10)
-
-        else:
-
-            print("Unknown page state.")
-            time.sleep(5)
-
-    except Exception as e:
-
-        print("ERROR:", e)
-        time.sleep(10)
-
-print("Finished.")
+if __name__ == "__main__":
+    main()
