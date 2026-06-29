@@ -147,15 +147,4 @@ Available Now!
 
 
 if __name__ == "__main__":
-
-    send("""✅ TEST SUCCESS
-
-GitHub Actions ✅
-Playwright ✅
-Telegram ✅
-
-Everything is working correctly.
-""")
-
-    # Comment the next line after testing
-    # main()
+    main()
